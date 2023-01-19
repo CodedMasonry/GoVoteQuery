@@ -1,4 +1,4 @@
-.git
-.replit
-replit.nix
-main
+/.git
+/.replit
+/replit.nix
+/main
