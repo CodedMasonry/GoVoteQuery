@@ -87,36 +87,35 @@ func GetRollcallVote(url string) (*RollcallVote, error) {
 
 // AppendToJSONFile: Appends a JSON representation of the provided RollcallVote struct to the specified file path. The function utilizes the os.OpenFile method to open or create the file, json.NewEncoder to encode the struct as JSON and io.WriteString to write the encoded JSON to the file. The file is closed after writing. Returns an error if one occurred.
 func AppendToJSONFile(filePath string, rollcall *RollcallVote) error {
-    file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+    // Open the file or create it if it doesn't exist
+    file, err := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
     if err != nil {
-        return err
+        return fmt.Errorf("Error opening file: %v", err)
     }
     defer file.Close()
 
-    var data struct {
-        Results []RollcallVote `json:"results"`
+    // Append rollcall to results array
+    if _, err := file.Seek(0, io.SeekEnd); err != nil {
+        return fmt.Errorf("Error seeking end of file: %v", err)
     }
-    if stat, _ := file.Stat(); stat.Size() > 0 {
-        if err := json.NewDecoder(file).Decode(&data); err != nil {
-            return err
+
+    // check if the file is empty
+    fi, _ := file.Stat()
+    if fi.Size() != 0 {
+        if _, err := file.Write([]byte(",")); err != nil {
+            return fmt.Errorf("Error writing to file: %v", err)
         }
-    } else {
-        data.Results = []RollcallVote{}
     }
 
-    data.Results = append(data.Results, *rollcall)
-
-    if err := file.Truncate(0); err != nil {
-        return err
-    }
-    if _, err := file.Seek(0, 0); err != nil {
-        return err
-    }
-    if err := json.NewEncoder(file).Encode(&data); err != nil {
-        return err
+    // Encode rollcall as JSON
+    encoder := json.NewEncoder(file)
+    if err := encoder.Encode(rollcall); err != nil {
+        return fmt.Errorf("Error encoding struct to JSON: %v", err)
     }
     return nil
 }
+
+
 
 
 
