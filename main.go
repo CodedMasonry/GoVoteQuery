@@ -7,6 +7,7 @@ import (
     "strconv"
     "time"
     "os"
+    "io"
     "encoding/json"
 )
 
@@ -52,38 +53,8 @@ type RollcallVote struct {
 }
 
 
-func printToLog(source string, output string) {
-  fmt.Printf("%v: %v", source, output)
-}
 
-/*
-The code uses the os.OpenFile function to open the file with the following flags :
-    os.O_APPEND: opens the file in append mode
-    os.O_CREATE: creates the file if it doesn't exist
-    os.O_WRONLY: opens the file for writing only
-*/
-func writeStructToJSON(fileName string, data RollcallVote) error {
-    file, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-    if err != nil {
-        return err
-    }
-    defer file.Close()
-
-    bytes, err := json.Marshal(data)
-    if err != nil {
-        return err
-    }
-
-    _, err = file.Write(bytes)
-    if err != nil {
-        return err
-    }
-
-    return nil
-}
-
-// getResponseHead Sends a head HTTP request to send url
-// (faster then get for finding highest possible value)
+// getResponseHead: Sends a head HTTP request to the provided URL and returns the response and an error if one occurred. The function utilizes the http.Head method to send the request and fmt.Errorf to format an error message if one occurred. The response body is closed after reading.
 func getResponseHead(url string) (*http.Response, error) {
   resp, err := http.Head(url)
 	if err != nil {
@@ -93,37 +64,77 @@ func getResponseHead(url string) (*http.Response, error) {
 	return resp, nil
 }
 
-// ParseXML sends a request to the url and applies the returned xml to RollcallVote struct
-// returns RollcallVote struct, returns nil if error
-func ParseXML(url string) (*RollcallVote, error) {
+// GetRollcallVote: Sends an HTTP GET request to the provided URL, reads the response body, and parses the XML data. The function utilizes the http.Get method to send the request, io.ReadAll to read the response body, and xml.Unmarshal to parse the XML data. The response body is closed after reading. Returns a pointer to a RollcallVote struct and an error if one occurred.
+func GetRollcallVote(url string) (*RollcallVote, error) {
     resp, err := http.Get(url)
     if err != nil {
-        return nil, fmt.Errorf("Error downloading XML: %v", err)
+        return nil, fmt.Errorf("Error sending HTTP request: %v", err)
     }
     defer resp.Body.Close()
 
-    var rollcall RollcallVote
-    err = xml.NewDecoder(resp.Body).Decode(&rollcall)
+    xmlData, err := io.ReadAll(resp.Body)
     if err != nil {
-        return nil, fmt.Errorf("Error decoding XML: %v", err)
+        return nil, fmt.Errorf("Error reading response body: %v", err)
+    }
+
+    var rollcall RollcallVote
+    if err := xml.Unmarshal(xmlData, &rollcall); err != nil {
+        return nil, fmt.Errorf("Error parsing XML: %v", err)
     }
 
     return &rollcall, nil
 }
 
-func appendResultToJson(rollCall RollcallVote) {
-  
+// AppendToJSONFile: Appends a JSON representation of the provided RollcallVote struct to the specified file path. The function utilizes the os.OpenFile method to open or create the file, json.NewEncoder to encode the struct as JSON and io.WriteString to write the encoded JSON to the file. The file is closed after writing. Returns an error if one occurred.
+func AppendToJSONFile(filePath string, rollcall *RollcallVote) error {
+    file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+
+    var data struct {
+        Results []RollcallVote `json:"results"`
+    }
+    if stat, _ := file.Stat(); stat.Size() > 0 {
+        if err := json.NewDecoder(file).Decode(&data); err != nil {
+            return err
+        }
+    } else {
+        data.Results = []RollcallVote{}
+    }
+
+    data.Results = append(data.Results, *rollcall)
+
+    if err := file.Truncate(0); err != nil {
+        return err
+    }
+    if _, err := file.Seek(0, 0); err != nil {
+        return err
+    }
+    if err := json.NewEncoder(file).Encode(&data); err != nil {
+        return err
+    }
+    return nil
 }
 
-func getVoteResults(year int, rollCall int, appendToFile bool) (RollcallVote, error) {
-  url := "https://clerk.house.gov/evs/2023/roll031.xml"
-    rollcall, err := ParseXML(url)
+
+
+func getVoteResults(year int, roll int, appendToFile bool, fileName string) (*RollcallVote, error) {
+    rollStr := strconv.Itoa(roll)
+    rollStr = fmt.Sprintf("%03d", roll)
+    url := fmt.Sprintf("https://clerk.house.gov/evs/%d/roll%s.xml", year, rollStr)
+
+    rollcall, err := GetRollcallVote(url)
     if err != nil {
         fmt.Println(err)
         return nil, err
     }
     if appendToFile {
-      appendResultToJson(rollcall)
+      err = AppendToJSONFile(fileName, rollcall)
+      if err != nil {
+        return nil, err
+      }
     }
     return rollcall, nil
 }
@@ -156,11 +167,18 @@ func GetYearMaximum(year int) (int, error) {
   return roll-3, nil
 }
 
-func parseResultsForYear(year int, fileName) error {
-  highestRollCall := GetYearMaximum(year)
-  for i := 1; i <= highestRollCall; i++ {
-    
+func parseResultsForYear(year int, fileName string) error {
+  highestRollCall, err := GetYearMaximum(year)
+  if err != nil {
+    return err
   }
+  for roll := 1; roll <= highestRollCall; roll++ {
+    _, err = getVoteResults(year, roll, true, fileName)
+    if err != nil {
+      return err
+    }
+  }
+  return nil
 }
 
 /* getPossibleResultTotal takes a before and after year, gets all possible
@@ -169,10 +187,12 @@ results and returns an int or if an error; 0 int and error code
 func getPossibleResultTotal(beforeYear int, afterYear int) (int, error) {
   totalPossibleRequests := 0
   for selectedYear := afterYear; selectedYear >= beforeYear; selectedYear -= 1 {
-    err := GetYearMaximum(selectedYear)
+    result, err := GetYearMaximum(selectedYear)
     if err != nil {
       return 0, err
     }
+    
+    fmt.Printf("[getPossibleResultTotal] %v\n", selectedYear)
     totalPossibleRequests += result
   }
   return totalPossibleRequests, nil
@@ -184,21 +204,25 @@ in between those years including the years passed
 IT IS ADVISED NOT TO PARSE MORE THEN 5 YEARS UNLESS YOU ARE SAVING IT TO A FILE
 */
 func getResultsBetweenYears(beforeYear int, afterYear int, fileName string) (string, error) {
-  totalPossibleRequests := 0
   
   for selectedYear := afterYear; selectedYear >= beforeYear; selectedYear -= 1 {
-    err := parseResultsForYear(selectedYear)
+    err := parseResultsForYear(selectedYear, fileName)
     if err != nil {
       return "", err
     }
-    totalPossibleRequests += result
+    fmt.Printf("[getResultsBetweenYears] %v\n", selectedYear)
   }
-  return fmt.Sprintf("%v.json", fileName) nil
+  return fmt.Sprintf("%v.json", fileName), nil
 }
 
 func main() {
     startTime := time.Now()
-    fmt.Println(getPossibleResultTotal(2020,2025))
+    //fmt.Println(getPossibleResultTotal(2000,2025))
     endTime := time.Now()
-    fmt.Println(endTime.Sub(startTime))
+    fmt.Println("Time Taken to calculate total: ", endTime.Sub(startTime))
+
+    startTime = time.Now()
+    fmt.Println(getResultsBetweenYears(2000,2025,"results.json"))
+    endTime = time.Now()
+    fmt.Println("Time taken to parse files: ", endTime.Sub(startTime))
 }
