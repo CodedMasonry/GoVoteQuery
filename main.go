@@ -168,6 +168,7 @@ func GetYearMaximum(year int) (int, error) {
 
 func parseResultsForYear(year int, fileName string) error {
   highestRollCall, err := GetYearMaximum(year)
+  startTime := time.Now()
   if err != nil {
     return err
   }
@@ -177,6 +178,8 @@ func parseResultsForYear(year int, fileName string) error {
       return err
     }
   }
+  endTime := time.Now().Sub(startTime)
+  fmt.Printf("[parseResultsForYear] total Results: %v, time taken: %v", highestRollCall, endTime)
   return nil
 }
 
@@ -218,10 +221,10 @@ func main() {
     startTime := time.Now()
     //fmt.Println(getPossibleResultTotal(2000,2025))
     endTime := time.Now()
-    fmt.Println("Time Taken to calculate total: ", endTime.Sub(startTime))
+    fmt.Println("Time Taken to calculate possible total: ", endTime.Sub(startTime))
 
     startTime = time.Now()
-    fmt.Println(getResultsBetweenYears(2000,2025,"results.json"))
+    fmt.Println(getResultsBetweenYears(1990,1999,"results.json"))
     endTime = time.Now()
     fmt.Println("Time taken to parse files: ", endTime.Sub(startTime))
 }
